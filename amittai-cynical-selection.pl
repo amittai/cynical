@@ -6,8 +6,8 @@ use Getopt::Long;
 use Benchmark qw(:all);
 use Time::HiRes qw( gettimeofday );  ## to get timing info for debugging
 use open ':std', ':encoding(UTF-8)'; ## use utf8 for stdin/stdout/stderr
-## uncomment this 2017.11.17
-#use List::BinarySearch qw( binsearch  binsearch_pos  binsearch_range );
+use List::BinarySearch qw( binsearch  binsearch_pos  binsearch_range ); ## you'll probably need to install this.
+#use Search::Binary;
 use FileHandle;
 use POSIX;
 use sort '_mergesort'; ## take advantage of mostly-ordered arrays
@@ -41,6 +41,8 @@ sub update_length_penalties;
 #            --seed_vocab=$working_dir/vocab.$seed_corpus_file   \
 #            --working_dir=$working_dir                           \
 #            --stats=$input     ( --batchmode  --keep_boring )
+
+## to-do: change it so it takes in vocab.task and vocab.unadapted rather than the *.fix.squish files.
 
 my ($task,$unadapted,$available,$seed_vocab,$stats,$working_dir,$jaded,$mincount,$keep_boring,$batchmode) = ('','','','','','','','','','');
 
@@ -79,7 +81,7 @@ my $task_tokens = 0;
 my $unadapted_tokens = 0;
 my $seed_tokens = 0;
 ## read in the lexicon
-print STDERR " * going through the task/unadapted distribution vocabularies...   ";
+print STDERR " * going through the task+unadapted distribution vocabularies...   ";
 open (STATS, "<$stats") or die "no such file $stats: $!";
 binmode STATS, ':encoding(UTF-8)';
 while(<STATS>){
@@ -135,28 +137,38 @@ while(<AVAILABLE>){
 close AVAILABLE;
 print STDERR "...done\n";
 ## at this point the %lexicon hash should contain all the words in
-## task+unadapted vocabularies and the seed + available corpora.
+## {task+unadapted, seed} vocabularies and the available corpus.
+
+## squish the lexicon
+my %replace; ## dictionary of words --> substitutions
+my %currmodel; ## the model we update as we go (initialized with SEED)
+my $currmodel_score; ## entropy of the task set using our model
 
 ## words in $task but not in $seed+$available can't be modeled
 $lexicon{"__impossible"}{task}{count} = 0;
 $lexicon{"__impossible"}{unadapt}{count} = 0;
 $lexicon{"__impossible"}{seed}{count} = 0;
 $lexicon{"__impossible"}{avail}{count} = 0;
+$currmodel{"__impossible"}{count}  = 0;
 ## words in $seed+$available but not in $task can't help to model $task
 $lexicon{"__useless"}{task}{count} = 0;
 $lexicon{"__useless"}{unadapt}{count} = 0;
 $lexicon{"__useless"}{seed}{count} = 0;
 $lexicon{"__useless"}{avail}{count} = 0;
+$currmodel{"__useless"}{count}  = 0;
 ## words whose counts are too low in $task and $unadapt to provide good stats
 $lexicon{"__dubious"}{task}{count} = 0;
 $lexicon{"__dubious"}{unadapt}{count} = 0;
 $lexicon{"__dubious"}{seed}{count} = 0;
 $lexicon{"__dubious"}{avail}{count} = 0;
+$currmodel{"__dubious"}{count}  = 0;
+## words that are otherwise unknown -- safety check!
+$lexicon{"__NOTFOUND"}{task}{count} = 0;
+$lexicon{"__NOTFOUND"}{unadapt}{count} = 0;
+$lexicon{"__NOTFOUND"}{seed}{count} = 0;
+$lexicon{"__NOTFOUND"}{avail}{count} = 0;
+$currmodel{"__NOTFOUND"}{count}  = 0;
 
-## squish the lexicon
-my %replace; ## dictionary of words --> substitutions
-my %currmodel; ## the model we update as we go (initialized with SEED)
-my $currmodel_score; ## entropy of the task set using our model
 print STDERR " * going though the lexicon...   ";
 ## have to use foreach and not 'each' because we're modifying the hash
 ## inside the loop.
@@ -175,14 +187,14 @@ foreach (keys %lexicon) {
         $currmodel{"__useless"}{count} += $lexicon{$word}{seed}{count};
         delete $lexicon{$word};
     } elsif (0 == $lexicon{$word}{avail}{count}) {
-	## these words will have 0 candidate sentences affiliated with
-	## them. regardless of what's in the seed, we can't do
-	## anything about them. remove to avoid having empty arrays.
+    	## these words will have 0 candidate sentences affiliated with
+    	## them. regardless of what's in the seed, we can't do
+    	## anything about them. remove to avoid having empty arrays.
         $replace{$word} = "__impossible";
         $lexicon{"__impossible"}{task}{count} += $lexicon{$word}{task}{count};
         $lexicon{"__impossible"}{unadapt}{count} += $lexicon{$word}{unadapt}{count};
         $lexicon{"__impossible"}{seed}{count} += $lexicon{$word}{seed}{count};
-	## the count in avail is 0 by construction
+    	## the count in avail is 0 by construction
         $currmodel{"__impossible"}{count} += $lexicon{$word}{seed}{count};
         delete $lexicon{$word};
     } elsif ( ($mincount > $lexicon{$word}{task}{count})
@@ -200,18 +212,22 @@ foreach (keys %lexicon) {
         delete $lexicon{$word};
     } elsif ( ( exp(1)  > $lexicon{$word}{ratio} )
 	      && ( exp(-1) < $lexicon{$word}{ratio} ) ){
-        unless ($keep_boring) {
-            ## if keep_boring=1, then 
-	    ## mark words with ratio between 0.5 and 2.  we can reasonably
-	    ## expect to estimate these probabilities accurately. bucket
-	    ## also by their frequency in the unadapted distribution. (the
-	    ## reason is because the unadapted distribution will tell us
-	    ## what percentage of the available sentences we can expect to
-	    ## have associated with the word.)
+        if ($keep_boring) {
+            ## pass boring words through unchanged.
+            $currmodel{$word}{count} += $lexicon{$word}{seed}{count};
+            $replace{$word} = $word;
+        } else {
+            ## if keep_boring=0, then 
+    	    ## mark words with ratio between 1/e and e.  we can reasonably
+    	    ## expect to estimate these probabilities accurately. bucket
+    	    ## also by their frequency in the unadapted distribution. (the
+    	    ## reason is because the unadapted distribution will tell us
+    	    ## what percentage of the available sentences we can expect to
+    	    ## have associated with the word.)
 
-	    ## the number of zeros after the decimal
-	    (my $band = $lexicon{$word}{unadapt}{prob}) =~ s/.*\.(0*).*/$1/;
-	    ## the label with which we're replacing the word.
+    	    ## the number of zeros after the decimal
+    	    (my $band = $lexicon{$word}{unadapt}{prob}) =~ s/.*\.(0*).*/$1/;
+    	    ## the label with which we're replacing the word.
             my $bucket = "__boring__".$band; 
             $replace{$word} = $bucket;
             $lexicon{$bucket}{ratio} = $band;
@@ -219,58 +235,53 @@ foreach (keys %lexicon) {
             $lexicon{$bucket}{unadapt}{count} += $lexicon{$word}{unadapt}{count};
             $lexicon{$bucket}{seed}{count} += $lexicon{$word}{seed}{count};
             $lexicon{$bucket}{avail}{count} += $lexicon{$word}{avail}{count};
-	    ## initialize the current model with the seed counts
-	    $currmodel{$bucket}{count} += $lexicon{$word}{seed}{count};
-	    delete $lexicon{$word};
-        } elsif ( $lexicon{$word}{ratio} < 1 ){
-            ## bucket bad (available-skewed) words by the first digit of
-            ## the log of their ratio, which is the same as the power of
-            ## e. bucket -3 means the ratio is under e^{-3} but above
-            ## e^{-4}. "int" fucntion rounds -3.5 to -3, and 3.5 to 3.
-            my $truncate = int( log( $lexicon{$word}{ratio} )); 
-            my $bucket = "__".$truncate; ## the label with which we're replacing the word.
-            $replace{$word} = $bucket;
-            $lexicon{$bucket}{ratio} = $truncate;
-            $lexicon{$bucket}{task}{count} += $lexicon{$word}{task}{count};
-            $lexicon{$bucket}{unadapt}{count} += $lexicon{$word}{unadapt}{count};
-            $lexicon{$bucket}{seed}{count} += $lexicon{$word}{seed}{count};
-            $lexicon{$bucket}{avail}{count} += $lexicon{$word}{avail}{count};
-            $currmodel{$bucket}{count} += $lexicon{$word}{seed}{count};
-            delete $lexicon{$word};
-        } else {
-            $currmodel{$word}{count} += $lexicon{$word}{seed}{count};
-            $replace{$word} = $word;
-        }
+    	    ## initialize the current model with the seed counts
+    	    $currmodel{$bucket}{count} += $lexicon{$word}{seed}{count};
+    	    delete $lexicon{$word};
+    	}
+    } elsif ( $lexicon{$word}{ratio} < exp(-1) ){
+	    ## words skewed more than an order of magnitude away from $task
+        ## bucket bad (available-skewed) words by the first digit of
+        ## the log of their ratio, which is the same as the power of
+        ## e. bucket -3 means the ratio is under e^{-3} but above
+        ## e^{-4}. "int" function rounds -3.5 to -3, and 3.5 to 3.
+        my $truncate = int( log( $lexicon{$word}{ratio} )); 
+        my $bucket = "__bad".$truncate; ## the label with which we're replacing the word.
+        $replace{$word} = $bucket;
+        $lexicon{$bucket}{ratio} = $truncate;
+        $lexicon{$bucket}{task}{count} += $lexicon{$word}{task}{count};
+        $lexicon{$bucket}{unadapt}{count} += $lexicon{$word}{unadapt}{count};
+        $lexicon{$bucket}{seed}{count} += $lexicon{$word}{seed}{count};
+        $lexicon{$bucket}{avail}{count} += $lexicon{$word}{avail}{count};
+        $currmodel{$bucket}{count} += $lexicon{$word}{seed}{count};
+        delete $lexicon{$word};
+    } else {
+	    ## pass word through unchanged.
+        $currmodel{$word}{count} += $lexicon{$word}{seed}{count};
+        $replace{$word} = $word;
     }
 }
 print STDERR "...done\n";
 
-## more efficient to just make another pass through the lexicon than
-## to update the currmodel{$word}{prob} a bunch of times.
-## "each %hash" is a true iterator, uses less memory than "keys %hash".
-while (my ($word, $value) = each %lexicon) {
-    ## hconstant is POSITIVE, and the log term in WGE and SGE is always
-    ## negative. The gain from adding a 'good' word is a _decrease_ in
-    ## perplexity|entropy.
-    $lexicon{$word}{hconstant} = $lexicon{$word}{task}{count}/$task_tokens;
-    $currmodel{$word}{count} = 0 unless ($currmodel{$word}{count});
-    if ($seed_tokens > 0) {
-    	$currmodel{$word}{prob}  = $currmodel{$word}{count}/$seed_tokens;
-    } else {
-    	$currmodel{$word}{prob}  = 0;
-    };
-}
 ## construct the squish-vocab corpora, save to disk.
 print STDERR " * producing corpus projections with reduced vocab...\n  task = $task_file_squish , and\n  available data = $available_file_squish\n";
 unless ($exists_task_file_squish) {
+# to-do: not clear why we need this at all, instead of just the squished task vocab file.    
     open (TASK, "<$task") or die "no such file $task: $!";
     binmode TASK, ':encoding(UTF-8)';
     open (TASK_SQUISH, ">$task_file_squish") or die "$!";
     binmode TASK_SQUISH, ':encoding(UTF-8)';
     while(<TASK>){
         chomp;
-        foreach (split(' ', $_)) {
-            print TASK_SQUISH "$replace{$_} " if ($_);
+        foreach my $token (split(' ', $_)) {
+    	    ## if $_ isn't in %replace, then something's been overlooked.
+    	    ## that said, handle it gracefully by marking the token.
+            unless (exists $replace{$token}) {
+print STDERR "TASK replace $token with __NOTFOUND, no $replace{$token} \n";
+                $replace{$token} = "__NOTFOUND";
+                $currmodel{"__NOTFOUND"}{count}++;        
+            }
+            print TASK_SQUISH "$replace{$token} ";
         }
         print TASK_SQUISH "\n";
     } # while
@@ -287,14 +298,44 @@ unless ($exists_available_file_squish) {
     	## don't store the raw lines in memory; it's too big and we
     	## perform no operations with it. just use the line_id
     	## afterwards to pull out the original line.
-    	foreach (split(' ', $_)) {
-            print AVAILABLE_SQUISH "$replace{$_} " if ($_);
+        foreach my $token (split(' ', $_)) {
+            unless (exists $replace{$token}) {
+print STDERR "AVAIL replace $token with __NOTFOUND, no $replace{$token} \n";
+                $replace{$token} = "__NOTFOUND";
+                $currmodel{"__NOTFOUND"}{count}++;        
+            }
+            print AVAILABLE_SQUISH "$replace{$token} ";
         }
         print AVAILABLE_SQUISH "\n";
     } # while
     close AVAILABLE; close AVAILABLE_SQUISH;
 } # unless
 print STDERR "...done\n";
+
+## more efficient to just make two passes through the lexicon and %currmodel than
+## to update the currmodel{$word}{prob} a bunch of times.
+## "each %hash" is a true iterator, uses less memory than "keys %hash".
+while (my ($word, $value) = each %lexicon) {
+    ## hconstant is POSITIVE, and the log term in WGE and SGE is always
+    ## negative. The gain from adding a 'good' word is a _decrease_ in
+    ## perplexity|entropy.
+    $lexicon{$word}{hconstant} = $lexicon{$word}{task}{count}/$task_tokens;
+    $currmodel{$word}{count} = 0 unless ($currmodel{$word}{count});
+    if ($seed_tokens > 0) {
+        $currmodel{$word}{prob}  = $currmodel{$word}{count}/$seed_tokens;
+    } else {
+        $currmodel{$word}{prob}  = 0;
+    };
+}
+while (my ($word, $value) = each %currmodel) {
+    ## sanity check: make sure we've initialized every word we know about so far.
+    $currmodel{$word}{count} = 0 unless ($currmodel{$word}{count});
+    if ($seed_tokens > 0) {
+        $currmodel{$word}{prob}  = $currmodel{$word}{count}/$seed_tokens;
+    } else {
+        $currmodel{$word}{prob}  = 0;
+    };
+}
 
 ## go through squished available file and set up data structures.
 my $smoothing_count = 0.01; ## for when log(0) fails
@@ -378,12 +419,13 @@ while (my ($word, $value) = each %lexicon) {
     $lexicon{$word}{WGE} = $lexicon{$word}{hconstant} * log(
         ($currmodel{$word}{count} + $smoothing_count) /
         ($currmodel{$word}{count} + 1) ); ## something in this calculation is off when words contain underscores
-    next if $word eq "__dubious"; ## don't want to select based on sketchy words
-    next if $word eq "__useless"; ## don't want to select based on words not in $task
-    next if $word eq "__impossible"; ## no point in selecting based on words not in $unadapted
-    next if $word =~ m/^__\-[0-9]/; ## no point in selecting based on words biased towards $poo
-    next if $word =~ m/^__boring__0{1,7}/; ## don't select on common, unbiased words
-    ## only allow it if it's less frequent than 1 in ten million tokens.
+    next if $word =~ m/^__/; ## skip all marked words.
+    # next if $word eq "__dubious"; ## don't want to select based on sketchy words
+    # next if $word eq "__useless"; ## don't want to select based on words not in $task
+    # next if $word eq "__impossible"; ## no point in selecting based on words not in $unadapted
+    # next if $word =~ m/^__bad\-[0-9]/; ## no point in selecting based on words biased towards $pool
+    # next if $word =~ m/^__boring__0{1,7}/; ## don't select on common, unbiased words
+    # ## only allow it if it's less frequent than 1 in ten million tokens.
     my @tmp = ($lexicon{$word}{WGE}, $word, $lexicon{$word}{hconstant});
     push @word_gain_estimates, \@tmp;
 } # while each %lexicon
@@ -394,22 +436,22 @@ print STDERR "...done\n";
 
 ## ok, now everything is set up and we're ready to start iterating!
 ## (until we run out of sentences to add)
-my $debuggingcounter = keys %available_hash;
+my $max_iterations = keys %available_hash;
 my $linecounter = 1;
-print STDERR "running max $debuggingcounter iterations!";
-while ($debuggingcounter > 0){
+print STDERR "running max $max_iterations iterations!";
+while ($max_iterations > 0){
     ## get best word from our sorted list
     last unless (@word_gain_estimates);
     my ($WGE,$bestword,$hconstant) = @{$word_gain_estimates[0]};
     my $loop_start_time = gettimeofday( );
-    print STDERR "    ===> $debuggingcounter best word\t$bestword\t";
+    print STDERR "    ===> $max_iterations best word\t$bestword\t";
     ## each element of $lexicon{$word}{line_list} is a triple: $score,
     ## $sentence_gain_estimate, $line_id. we just need the line_id.
     my $num_lines_for_bestword = scalar @{$lexicon{$bestword}{line_list}};
     ## sanity check: do we have any lines left?
     if ($num_lines_for_bestword == 0) {
         ## if there are no sentences left, then delete the word.
-        print STDERR "no lines left for word $bestword : deleting it from lexicon. ";
+        print STDERR "\n        no lines left for word $bestword : deleting it from lexicon. ";
         delete $lexicon{$bestword};
         print STDERR scalar (keys %lexicon) . " words left.\n";
     	my (@wordindex) = grep {$word_gain_estimates[$_]->[1] eq $bestword} 0..$#word_gain_estimates;
@@ -429,11 +471,11 @@ while ($debuggingcounter > 0){
         if ($available_hash{$first_line_id_for_bestword}) {
     	    ## update the SGE for the best sentence for that best word.
     	    my $sentence_gain_estimate = &compute_sentence_gain_estimate($first_line_id_for_bestword);
-    	    print STDERR "updating SGE $lexicon{$bestword}{line_list}[$array_index]->[1] ->$sentence_gain_estimate  ";
+    	    print STDERR "updating SGE $lexicon{$bestword}{line_list}[$array_index]->[1] -> $sentence_gain_estimate  ";
     	    ## this is the first/best line, so its score sets the threshold
-    	    $score_threshold =
-            $length_penalty{$available_hash{$first_line_id_for_bestword}{tokencount}}
-    				+ $sentence_gain_estimate;
+    	    $score_threshold =  
+                $length_penalty{$available_hash{$first_line_id_for_bestword}{tokencount}}
+    			+ $sentence_gain_estimate;
     	    print STDERR " and sentence score $lexicon{$bestword}{line_list}[$array_index]->[0] -> $score_threshold    ";
                 ## actually... don't do the actual update here! it messes up the indices.
     	    last;
@@ -445,20 +487,22 @@ while ($debuggingcounter > 0){
     	} # if
     } #for $array_index
 
+    print STDERR "           pruning " . @indices_to_prune ." ghosts.\n" if (@indices_to_prune);
     while (@indices_to_prune){
     	my $prune = pop @indices_to_prune; # decreasing order!
     	## now it's safe to delete the already-used entries
-    	print STDERR "           pruned the ghost of line "
-    	    . $lexicon{$bestword}{line_list}[$prune]->[2] ." (index $prune)\n";
+ #   	print STDERR "           pruned the ghost of line "
+ #   	    . $lexicon{$bestword}{line_list}[$prune]->[2] ." (index $prune)\n";
     	splice @{$lexicon{$bestword}{line_list}}, $prune, 1;
     } # foreach @indices_to_prune
+
 
     ## recompute the number of sentences left for the best word:
     $num_lines_for_bestword = scalar @{$lexicon{$bestword}{line_list}};
     ## sanity check: do we have any lines left?
     if ($num_lines_for_bestword == 0) {
         ## if there are no sentences left, then delete the word.
-        print STDERR "no lines left for word $bestword : deleting it from lexicon. ";
+        print STDERR "\n        no lines left for word $bestword : deleting it from lexicon. ";
         delete $lexicon{$bestword};
         print STDERR scalar (keys %lexicon) . " words left.\n";
         my (@wordindex) = grep {$word_gain_estimates[$_]->[1] eq $bestword} 0..$#word_gain_estimates;
@@ -474,25 +518,30 @@ while ($debuggingcounter > 0){
     my $insert_index = binsearch_pos {$a <=> $b} $score_threshold, @line_list_scores;
     ## don't go off the end
     $insert_index = $#line_list_scores if ($insert_index > $#line_list_scores);
-    print STDERR "  insert index: $insert_index ";
+    print STDERR "  after updating, best line was re-sorted to index: $insert_index.  ";
 
     my $max_update = $insert_index; ## we'll update all sentences before this one.
     if ($batchmode) {
         ## we want to update at least as many sentences as we're going to
-        ## select. here's a big, blunt, instrument: update the first 2*log(k)
-        ## lines, where k is # of sentences containing bestword.
+        ## select. here's a big, blunt, instrument: always update either the
+        ## first 2*sqrt(k) lines, where k is # of sentences containing
+        ## bestword, or the first $insert_index lines, whichever is greater.
         my $sqrt_lines = POSIX::ceil( sqrt(scalar @line_list_scores));
         $max_update = 2*$sqrt_lines if (2*$sqrt_lines > $insert_index);
+        ## don't go off the end
+        $max_update = $#line_list_scores if ($max_update > $#line_list_scores);
     }
+    print STDERR "  updating lines from index 0 to $max_update [last=$#line_list_scores]. ";
 
     ## now update the sentences
-    my $update_start_time = gettimeofday( );
+    my $updated_lines=0; ## keep track of how many lines we updated
     for (0..$max_update) {
         ## iterate backwards through array so pruning ghost lines won't
         ## mess up the indices of the lines yet to update!
         my $i = $max_update - $_;
         my $line_id = $lexicon{$bestword}{line_list}[$i]->[2];
-        ## check whether the line has already been selected.
+        ## check whether the line has already been selected. this is why
+        ## $updated_lines != $max_update, especially in later iterations.
         unless ($available_hash{$line_id}) {
             ## remove the unavailable line
             splice @{$lexicon{$bestword}{line_list}}, $i, 1 ;
@@ -500,6 +549,7 @@ while ($debuggingcounter > 0){
             next; ## move on to next index
         } # unless
         ## line still available! update the score for this sentence for that best word.
+        $updated_lines++;
         my $sentence_gain_estimate = &compute_sentence_gain_estimate($line_id);
         my $score = $length_penalty{$available_hash{$line_id}{tokencount}} +
             $sentence_gain_estimate;
@@ -507,12 +557,17 @@ while ($debuggingcounter > 0){
         ## update the entry for that line for this word.
         $lexicon{$bestword}{line_list}[$i] = \@tmp;
     } # for
+    ## it's possible that we just pruned all the lines we'd marked for
+    ## updating, and actually updated zero lines. this reduces our future
+    ## search space, but does not help us add good lines right now. in that
+    ## case, try again.
+    next if (0 == $updated_lines);
 
     ## sanity check: do we have any lines left?
     $num_lines_for_bestword = scalar @{$lexicon{$bestword}{line_list}};
-    if ($num_lines_for_bestword == 0) {
+    if (($updated_lines == 0) && ($num_lines_for_bestword == 0)) {
         ## if there are no sentences left, then delete the word.
-        print STDERR "no lines left for word $bestword : deleting it from lexicon. ";
+        print STDERR "\n        no lines left for word $bestword : deleting it from lexicon. ";
         delete $lexicon{$bestword};
         print STDERR scalar (keys %lexicon) . " words left.\n";
         my (@wordindex) = grep {$word_gain_estimates[$_]->[1] eq $bestword} 0..$#word_gain_estimates;
@@ -531,31 +586,37 @@ while ($debuggingcounter > 0){
 
     my @goodlines_tuples = ();
     if ($batchmode) {
-        ## select the top sqrt(lines) best sentences, and remove them entirely.
-    	## we have pruned lines since picking the best sentence. As the array
-    	## has (potentially) shrunk, compute the new sqrt(k)
-    	my $new_sqrt_lines = POSIX::ceil( sqrt(scalar @sorted));
-    	## ah, why the hell not:
+        ## select the top sqrt(lines) best sentences, and remove them
+        ## entirely. we may have pruned lines since picking the best sentence,
+        ## so compute the new sqrt(k). 
+        my $new_sqrt_lines = POSIX::ceil( sqrt(scalar @sorted));
+        ## don't pick more sentences than we just updated. we've still removed
+        ## sqrt(k) lines from the stack, it's just that some might have
+        ## already used.
+        $new_sqrt_lines = $updated_lines if ($updated_lines < $new_sqrt_lines);
+    	## take them all.
     	@goodlines_tuples = splice @{$lexicon{$bestword}{line_list}}, 0, $new_sqrt_lines;
-    	## don't add adjacent string-identical duplicates in the same
+    	## don't add consecutive string-identical duplicates in the same
     	## batch. it probably doesn't make a lick of difference, but
     	## seeing repeated sentences looks bad to humans. *rolleyes*
-    	my $prev_string="";
-        my @indices_to_unpick = ();
+    	my $prev_string='';
+        my @indices_to_unselect = ();
     	for my $i (0..$#goodlines_tuples){
     	    ## actually, the tuples don't contain the string, so this is a right pain.
     	    my $id = $goodlines_tuples[$i]->[2];
+            ## some ghosts keep appearing; we prune them right before printing.
+            next unless ($available_hash{$id});  
     	    my $string = $available_hash{$id}{string};
-    	    if ($string eq $prev_string){
-                ## mark string-identical line for returning to the pool. the
-                ## indices should wind up in ascending order.
-                push @indices_to_unpick, ($i);
+    	    if (($string) && ($string eq $prev_string)) {
+                ## mark string-identical (and non-empty) line for returning to
+                ## the pool. the indices should wind up in ascending order.
+                push @indices_to_unselect, ($i);
     	    } else {
         		$prev_string = $string;
     	    }
     	}
-        while (@indices_to_unpick) {
-            my $array_index = pop @indices_to_unpick; # go in descending index order
+        while (@indices_to_unselect) {
+            my $array_index = pop @indices_to_unselect; # go in descending index order
             ## put the duplicate back at the front of the un-selected list
             unshift @{$lexicon{$bestword}{line_list}}, (splice @goodlines_tuples, $array_index, 1);
             ## this decreases the size of the batch!
@@ -564,7 +625,8 @@ while ($debuggingcounter > 0){
     } else {
         ## no batchmode, just take first sentence.
     	@goodlines_tuples = splice @{$lexicon{$bestword}{line_list}}, 0, 1;
-    	print STDERR "adding ".scalar(@goodlines_tuples)." of $num_lines_for_bestword lines to corpus  ";
+#    	print STDERR "adding ".scalar(@goodlines_tuples)." of $num_lines_for_bestword lines to corpus  ";
+        print STDERR "adding ".scalar(@goodlines_tuples)." of $num_lines_for_bestword lines to corpus  ";
     } # if-else $batchmode
 
     ## note we're not removing this line from the line_lists for the other words it contains.
@@ -581,13 +643,12 @@ while ($debuggingcounter > 0){
             next; ## move on
         } # unless
     	my @goodline_tokens = split(' ', $available_hash{$goodline_id}{string});
-    	## JADED columns are: sentence {score, penalty, gain, output rank,
-    	## input line_id}, the root word, WGE, and the squished line.
+    	## JADED columns: sentence {input line_id, output rank, score,
+    	## penalty, gain}, total score, the root word, WGE, and the squished line.
     	$currmodel_score += $goodline_score;
-    	print JADED join("\t", ( $currmodel_score, $goodline_score,
+    	print JADED join("\t", ( $goodline_id, $currmodel_linecount, $goodline_score,
     				 $length_penalty{@goodline_tokens},
-    				 $goodline_sge, $currmodel_linecount,
-    				 $goodline_id, $bestword, $WGE,
+    				 $goodline_sge, $currmodel_score, $bestword, $WGE,
     				 $available_hash{$goodline_id}{string} ) ) . "\n";
     	delete $available_hash{$goodline_id}; ## remove the line entirely
     	## update the currmodel with the contents of the sentence.
@@ -608,7 +669,7 @@ while ($debuggingcounter > 0){
     $num_lines_for_bestword = scalar @{$lexicon{$bestword}{line_list}};
     if ($num_lines_for_bestword == 0) {
     	## if there are no sentences left, then delete the word.
-    	print STDERR "no lines left for word $bestword : deleting it from lexicon. ";
+    	print STDERR "\n        no lines left for word $bestword : deleting it from lexicon. ";
     	delete $lexicon{$bestword};
     	print STDERR scalar (keys %lexicon) . " words left.\n";
     	my (@wordindex) = grep {$word_gain_estimates[$_]->[1] eq $bestword} 0..$#word_gain_estimates;
@@ -623,13 +684,14 @@ while ($debuggingcounter > 0){
         * log( ($currmodel{$word}{count} + $smoothing_count) / ($currmodel{$word}{count} + 1) );
     	## compute each word's new empirical probability
         $currmodel{$word}{prob} = $currmodel{$word}{count} / $currmodel_wordcount;
-        next if $word eq "__dubious"; ## don't want to select based on sketchy words
-        next if $word eq "__useless"; ## don't want to select based on words not in $task
-        next if $word eq "__impossible"; ## no point in selecting based on words not in $available
-        next if $word =~ m/^__\-[0-9]/; ## no point in selecting based on words biased towards $unadapted
-#        next if ($keep_boring < 1) && ($word =~ m/^__boring__0{1,7}/); ## don't select on common, unbiased words
-        ## if $keep_boring==1, then there are no __boring tokens and the next line won't fire.
-        next if $word =~ m/^__boring__0{1,7}/; ## don't select on common, unbiased words. only allow it if it's less frequent than 1 in ten million tokens.
+        next if $word =~ m/^__/; ## skip all marked words.
+#         next if $word eq "__dubious"; ## don't want to select based on sketchy words
+#         next if $word eq "__useless"; ## don't want to select based on words not in $task
+#         next if $word eq "__impossible"; ## no point in selecting based on words not in $available
+#         next if $word =~ m/^__bad\-[0-9]/; ## no point in selecting based on words biased towards $unadapted
+# #        next if ($keep_boring < 1) && ($word =~ m/^__boring__0{1,7}/); ## don't select on common, unbiased words
+#         ## if $keep_boring==1, then there are no __boring tokens and the next line won't fire.
+#         next if $word =~ m/^__boring__0{1,7}/; ## don't select on common, unbiased words. only allow it if it's less frequent than 1 in ten million tokens.
         my @tmp = ($lexicon{$word}{WGE}, $word, $lexicon{$word}{hconstant});
         push @word_gain_estimates, \@tmp;
     } # foreach
@@ -641,11 +703,17 @@ while ($debuggingcounter > 0){
 
     ## update the length penalties for the next sentence we add
     &update_length_penalties();
-    $debuggingcounter--;
+    $max_iterations--;
     $linecounter++;
     my $elapsed = gettimeofday() - $loop_start_time;
     print STDERR " :: finished in $elapsed sec total.\n";
 }
+print STDERR "=======================\n";
+print STDERR "Done selecting sentences.\n";
+print STDERR "Lexicon still contains " . scalar (keys %lexicon)
+    . " unsuitable words: " . join(" , ", (keys %lexicon)) . " \n";
+print STDERR "=======================\n";
+
 
 print STDOUT "=======================";
 
@@ -677,6 +745,9 @@ sub compute_sentence_gain_estimate {
     $available_hash{$line_id}{SGE} = $sentence_gain_estimate;
     return $sentence_gain_estimate;
 } # sub
+
+## TO-DO : refactor the "any lines left for this word?" check into a
+## subroutine [the block starting with if ($num_lines_for_bestword == 0) ].
 
 exit;
 

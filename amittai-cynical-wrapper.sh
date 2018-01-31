@@ -45,16 +45,20 @@ mkdir -p $working_dir
 ## mark all tokens that start with double underscores, because we use
 ## __ to indicate special information later.
 for file in $task_distribution_file $unadapted_distribution_file $seed_corpus_file $available_corpus_file; do
-    if [ ! -f $file.fix ]; then
+    if [ ! -f $file.fix ] && [ ! -f $file.fix.gz ]; then
         ## "match at least two underscores preceded by space or
         ## start-of-line, and mark them"
         ## also need to nuke non-breaking whitespace:
         ## s/\s+/ /g;  ## in utf8 strings, \s matches non-breaking space
         ## perl -CS : declare STD{IN,OUT,ERR} to be UTF-8
-	cat $file \
-            | perl -pe 's/(\s|^)(__+)/$1\@$2\@/g;' \
-	    | perl -CS -pe 's/\s+/ /g; s/ $//; $_.="\n"' \
-	    > $file.fix
+	lowercasing=''
+	if [ "$needs_lowercasing" -eq "1" ]; then
+	    lowercasing='$_=lc;'
+	fi
+	## what a mess. In order to have the lowercasing optional, we build up a command in parts.
+	command1=' | perl -pe '\''s/(\s|^)(__+)/$1\@$2\@/g;'\''' 
+	command2=' | perl -CS -pe '\''s/\s+/ /g; s/ $//; $_.="\n"; ' ## yes, it's unbalanced
+        eval cat $file $command1 $command2 $lowercasing "'" > $file.fix
     fi;
 done;
 
@@ -64,7 +68,7 @@ for file in $task_distribution_file $unadapted_distribution_file $seed_corpus_fi
     input=$data_dir/$file.fix
     output=$working_dir/vocab.$file.fix
     input_tmp=$data_dir/$file.tmp
-    if [ ! -f $output ]; then
+    if [ ! -f $output ] && [ ! -f $output.gz ]; then
 	if [ "$needs_lowercasing" -eq "1" ]; then
   	    ## perl -CS : declare STD{IN,OUT,ERR} to be UTF-8
 	    ## see http://perldoc.perl.org/perlrun.html#*-C-[_number/list_]*
@@ -83,7 +87,7 @@ done;
 ## compute relative vocab stats for the corpora
 echo -n " * compute relative statistics between corpora ...   "
 output=$working_dir/vocab.ratios.task-unadapted
-if [ ! -f $output ]; then
+if [ ! -f $output ] && [ ! -f $output.gz ]; then
     $code_path/amittai-vocab-ratios.pl \
 	--model1=$working_dir/vocab.$task_distribution_file.fix     \
 	--model2=$working_dir/vocab.$unadapted_distribution_file.fix \
@@ -109,7 +113,7 @@ if [ "$keep_boring" -gt "0" ]; then
     flags="${flags} --keep_boring "
 fi
 
-if [ ! -f $working_dir/$jaded_file ]; then
+if [ ! -f $working_dir/$jaded_file ] && [ ! -f $working_dir/$jaded_file.gz ]; then
     $code_path/amittai-cynical-selection.pl                  \
 	--task=$data_dir/$task_distribution_file.fix          \
 	--unadapted=$data_dir/$unadapted_distribution_file.fix \
