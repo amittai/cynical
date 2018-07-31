@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 '''
 This is a Python re-implementation of 
 amittai-cynical-wrapper.sh
@@ -18,12 +20,12 @@ The port is by Steve Sloto
 import os, re, shutil, subprocess, sys
 from datetime import datetime
 
-def cynical_selection(repr, avail, seed=[],
-                 batch_mode=False, keep_boring=True, save_memory=True,
-                 lower=True, tokenize=True, debug=True,
+def cynical_selection(repr_lines, avail_lines, seed_lines=[],
+                 batch_mode=False, keep_boring=True, 
+                 save_memory=True, lower=True, debug=True,
                  min_count=3, max_count=10000, num_lines=0,
-                 outdir='/tmp', save_output=False,
-                 cynical_perl_script="cynical/amittai-cynical-selection.pl"):
+                 outdir='/tmp/cynical_out', save_output=False,
+                 cynical_perl_script="amittai-cynical-selection.pl"):
                  
     ''' See the large argparse section in main() for info on what these parameters actually entail. 
         In some cases I've altered the defaults in this function to be more similar to bootstrapping usecase. 
@@ -31,48 +33,85 @@ def cynical_selection(repr, avail, seed=[],
         We're also expecting that this data is already tokenized (unless you want to run 
         selection on non-tokenized data for some weird reason.)
     '''
-    
+
+    #Check that the cyncial_perl_script exists and can be executed.
+
+# Uncomment if you're using this as a pointer to a local script rather than something on the shell path
+#    if not os.path.exists(cynical_perl_script):
+#        raise FileNotFoundError("Path for cynical_perl_script does not exist!")
+
+    if shutil.which(cynical_perl_script) == None:
+        raise PermissionError("cynical_perl_script is not  executible...")
+
     #Set up the directory where we’re going to work (if it doesn’t exist)...
     os.makedirs(outdir, mode=0o777, exist_ok=True)
     
-    #Preprocess our corpora
-    if debug:
-        sys.stderr.write("Sanitizing REPR Lines... at "+datetime.now().isoformat(" ")+"\n")
-    repr = prep_lines(repr)
-    avail = prep_lines(avail)
-    if debug:
-        sys.stderr.write("Sanitizing AVAIL Lines... at "+datetime.now().isoformat(" ")+"\n")
-    seed = prep_lines(seed)
-    if debug:
-        sys.stderr.write("Sanitizing SEED Lines... at "+datetime.now().isoformat(" ")+"\n")
-
+    #Run a few checks up front to see if any of our inputs are equivalent.
+    #If so, we can cut down on our pre-processing.
+    if debug: sys.stderr.write("Checking whether input files are duplicates at "+datetime.now().isoformat(" ")+"\n")
+    avail_is_repr = (avail_lines == repr_lines)
+    seed_is_repr = (seed_lines == repr_lines)
+    seed_is_avail = (seed_lines == avail_lines)
+    
+    
+    #Cool, now we can change the contents of the lists away from how they were originally input.
+    #We'll start with avail, and follow all of the steps needed to get it ready for the perl script.
+    if debug: sys.stderr.write("Sanitizing AVAIL Lines... at "+datetime.now().isoformat(" ")+"\n")
+    avail_lines = prep_lines(avail_lines)
+    
     #We only care about having the full corpus for the available set written to file for downstream use
     #For the others, we're just cleaning them up for use for vocabulary statistics.
     avail_corpus_file=outdir+"/avail.corpus"
     with open(avail_corpus_file, 'w') as available_corpus:
-        available_corpus.write('\n'.join(avail)+'\n')
-
-    #Get vocabulary counts for our corpora
-    repr_words=get_vocab_counts(repr)
-    avail_words=get_vocab_counts(avail)
-    seed_words=get_vocab_counts(seed)
+        available_corpus.write('\n'.join(avail_lines)+'\n')
     
-    #Save said counts to temporary files
-    repr_vcb_file=outdir+"/repr.vocab"
+    #Now we'll get our vocabulary counts, and write those to disk
+    if debug: sys.stderr.write("Counting AVAIL Words... at "+datetime.now().isoformat(" ")+"\n")
+    avail_words=get_vocab_counts(avail_lines)
     avail_vcb_file=outdir+"/avail.vocab"
-    seed_vcb_file=outdir+"/seed.vocab"
-    
-    write_vocab_counts(repr_words, repr_vcb_file)
+    if debug: sys.stderr.write("Writing AVAIL Words... at "+datetime.now().isoformat(" ")+"\n")
     write_vocab_counts(avail_words, avail_vcb_file)
-    write_vocab_counts(seed_words, seed_vcb_file)
     
-    sys.stderr.write(datetime.now().isoformat(" ")+\
-    " Corpora have been preprocessed, vocab files written to disk\n")
+    
+    if avail_is_repr:
+        #If we've prepped the same list already, skip the computation.
+        repr_words = avail_words
+        repr_vcb_file = avail_vcb_file
+    else:
+        #if we have a separate representative set, do the same prep minus writing the corpus to disk
+        if debug: sys.stderr.write("Sanitizing REPR Lines... at "+datetime.now().isoformat(" ")+"\n")
+        repr_lines = prep_lines(repr_lines)
+        if debug: sys.stderr.write("Counting REPR Words... at "+datetime.now().isoformat(" ")+"\n")
+        repr_words=get_vocab_counts(repr_lines)
+        if debug: sys.stderr.write("Writing REPR Words... at "+datetime.now().isoformat(" ")+"\n")
+        repr_vcb_file=outdir+"/repr.vocab"
+        write_vocab_counts(repr_words, repr_vcb_file)
+    
+    #Similar checks for whether we run computation for seed
+    if seed_is_repr:
+        seed_vcb_file = repr_vcb_file
+    elif seed_is_avail:
+        seed_vcb_file = avail_vcb_file
+    else:
+        #And, if we have a unique seed, we'll prep that.
+        if debug: sys.stderr.write("Sanitizing SEED Lines... at "+datetime.now().isoformat(" ")+"\n")
+        seed_lines= prep_lines(seed_lines)
+        if debug: sys.stderr.write("Counting SEED Words... at "+datetime.now().isoformat(" ")+"\n")
+        seed_words=get_vocab_counts(seed_lines)
+        if debug: sys.stderr.write("Writing SEED Words... at "+datetime.now().isoformat(" ")+"\n")
+        seed_vcb_file=outdir+"/seed.vocab"
+        write_vocab_counts(seed_words, seed_vcb_file)
+    
+    if debug:
+        sys.stderr.write(datetime.now().isoformat(" ")+\
+        " -- All Corpora have been preprocessed, vocab files written to disk\n")
 
-    #Get vocabulary ratios <- probably not needed
+    #Now we need vocabulary ratios between REPR and AVAIL.
+    #We probably do not need the ratios themselves for cynical
+    #But we will need a file with its specific format.
+    sys.stderr.write(datetime.now().isoformat(" ")+\
+    " Calculating vocabulary ratio...\n")
     ratios=get_vocab_ratios(repr_words, avail_words)
-    
-    #Oh, and write them to disk!
     vcb_ratio_file=outdir+"/repr.avail.vocab.ratios"
     write_vocab_ratios(ratios, vcb_ratio_file)
     sys.stderr.write(datetime.now().isoformat(" ")+\
@@ -82,22 +121,22 @@ def cynical_selection(repr, avail, seed=[],
     del repr_words
     del avail_words
     del seed_words
-    del repr
-    del seed
+    del repr_lines
+    del seed_lines
     
     jaded_file=outdir+"/jaded.output"
 
     #Now begins the process of writing up our command-line arguments for calling the thing
     #shlex says we want our calls to look like this:
-    cynical_args=[cynical_perl_script, \
-                  '--task_vocab='+repr_vcb_file, \
-                  '--unadapt_vocab='+avail_vcb_file, \
-                  '--available='+avail_corpus_file, \
-                  '--seed_vocab='+seed_vcb_file, \
-                  '--working_dir='+outdir, \
-                  '--stats='+vcb_ratio_file, \
-                  '--jaded='+jaded_file, \
-                  '--mincount='+str(min_count), \
+    cynical_args=[cynical_perl_script,
+                  '--task_vocab='+repr_vcb_file,
+                  '--unadapt_vocab='+avail_vcb_file,
+                  '--available='+avail_corpus_file,
+                  '--seed_vocab='+seed_vcb_file,
+                  '--working_dir='+outdir,
+                  '--stats='+vcb_ratio_file,
+                  '--jaded='+jaded_file,
+                  '--mincount='+str(min_count),
                       ]
 
     if num_lines > 0:
@@ -120,12 +159,14 @@ def cynical_selection(repr, avail, seed=[],
             stderr.write(cynical_proc.stderr.read())
             stdout.write(cynical_proc.stdout.read())
     #Assuming all went well above, unify our scores / line order with our original avail list
-    cynical_out = read_jaded(jaded_file, avail)
+    cynical_out = read_jaded(jaded_file, avail_lines)
 
     if save_output == False:
         #nuke our output files. We have scores, and I want the world to burn!
         shutil.rmtree(outdir, ignore_errors=True)
-
+    else:
+        if debug:
+            sys.stderr.write("We've finished with our selection, output is saved to "+jaded_file+"\n")
     return cynical_out
 
 def prep_lines(corpus, lower=True):
@@ -263,10 +304,7 @@ def read_jaded(jaded_file, avail):
             jaded_info[raw_line]['WGE']=line[7]
         return jaded_info
 
-#def main():
-
-if __name__ == "__main__":
-#    main()
+def main():
     ''' An example implementation of reading in files for cynical from disk and calling the core perl module 
         This should function as 'amittai-cynical-wrapper.sh' except with cmd line args
         in place of a wrapper '''
@@ -290,6 +328,7 @@ if __name__ == "__main__":
     parser.add_argument('--lower', help="Lowercase the data, and reduce vocabulary size further.", action="store_true", default=False)
     parser.add_argument('--out-dir', help='Directory to write our output files to.', required=True)
     parser.add_argument('--save-memory', help="Saves memory, runs slower", action="store_true", default="False")
+    parser.add_argument('--cyn-path', help="Location of cynical perl script.", default="amittai-cynical-selection.pl")
     args = parser.parse_args()
     
     #Basic AF file IO. Sanitization follows in the prep_corpus function.
@@ -314,8 +353,12 @@ if __name__ == "__main__":
     cynical_out = cynical_selection(repr, avail, seed,
                  batch_mode=args.batch_mode, keep_boring=args.keep_boring, lower=args.lower,
                  min_count=args.min_count, max_count=args.max_count, num_lines=args.num_lines,
-                 outdir=args.out_dir, save_memory=args.save_memory, save_output=True)
-    sys.stderr.write("We've finished with our selection, output is saved to "+args.out_dir+"/jaded.output\n")
+                 outdir=args.out_dir, save_memory=args.save_memory, 
+                 cynical_perl_script=args.cyn_path, save_output=True)
+                 
+if __name__ == "__main__":
+    main()
+
 
 
 ## The MIT License (MIT)
