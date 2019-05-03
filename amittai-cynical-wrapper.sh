@@ -46,8 +46,6 @@ numlines=0
 keep_boring=1
 ## set to 1 to lowercase the data. helps reduce lexicon further.
 needs_lowercasing=1
-## TO-DO: add a $verbose var to turn off all the logging.
-verbose=0
 
 working_dir=$data_dir
 mkdir -p $working_dir

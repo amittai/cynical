@@ -61,6 +61,7 @@ exit;
 ##
 ## Copyright 2014-2017 amittai axelrod
 ## Copyright 2017      Amazon Technologies, Inc.
+## Copyright 2018-2019 amittai axelrod
 ##
 ## Permission is hereby granted, free of charge, to any person
 ## obtaining a copy of this software and associated documentation
