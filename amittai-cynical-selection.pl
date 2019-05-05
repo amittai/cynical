@@ -17,14 +17,14 @@ use sort '_mergesort'; ## take advantage of mostly-ordered arrays
 no sort 'stable'; ## don't care if stable; speed matters more
 ## you may need to install the first modules.
 ## $  sudo cpan install List::MoreUtils
-## $  sudo cpan install Time::HiRes   
-## $  sudo cpan install Sort::Key::Top  
+## $  sudo cpan install Time::HiRes
+## $  sudo cpan install Sort::Key::Top
 ## $  sudo cpan install Test::Simple
 ## $  sudo cpan install Array::Heap
 ## $  sudo cpan install Array::Heap::ModifiablePriorityQueue
 ## $  sudo cpan install autovivification  # yes, lowercase
 use List::Util qw( reduce max );  ## reduce finds 1-best value in hash
-use List::MoreUtils qw( uniq lastidx ); 
+use List::MoreUtils qw( uniq lastidx );
 use Sort::Key::Top; ## get top n values.
 use Array::Heap::ModifiablePriorityQueue;
 ## fantastic: https://metacpan.org/pod/Array::Heap::ModifiablePriorityQueue
@@ -59,9 +59,9 @@ sub count_num_lines_for_word;
 #            --working_dir=$working_dir                           \
 #            --stats=$input     ( --batchmode  --keep_boring )
 
-my ($task_vocab, $unadapt_vocab, $available, $seed_vocab, $stats, 
-    $working_dir, $jaded, $mincount, $maxcount, $keep_boring, 
-    $batchmode, $numlines, $save_memory) 
+my ($task_vocab, $unadapt_vocab, $available, $seed_vocab, $stats,
+    $working_dir, $jaded, $mincount, $maxcount, $keep_boring,
+    $batchmode, $numlines, $save_memory)
       = ('','','', '','','', '','','', '','','', '');
 
 GetOptions ("task_vocab=s" => \$task_vocab,
@@ -82,7 +82,7 @@ GetOptions ("task_vocab=s" => \$task_vocab,
 $working_dir ||= ".";
 $mincount    ||= 3;
 $batchmode   ||= 0;
-$keep_boring ||= 0;
+$keep_boring ||= 1;
 $numlines    ||= 0;   ## max number of lines to pick. 0 means 'all'.
 $save_memory ||= 0;   ## use maxcount to reduce memory usage. runs slower.
 (my $available_file = $available) =~ s/^.*\/(.*?)$/$1/; ## strip path
@@ -179,7 +179,7 @@ foreach (0..$length_cap) {
     ## smoothing_count is defined elsewhere and is assumed to be small,
     ## probably 0.01. the factor of 2 is to ensure that the ratio is always
     ## >1 in the $_=0 edge case.
-    $length_penalty{$_} = log( ($currmodel_wordcount + $_ + 2*$smoothing_count) 
+    $length_penalty{$_} = log( ($currmodel_wordcount + $_ + 2*$smoothing_count)
                              / ($currmodel_wordcount + $smoothing_count) );
 }
 #update_length_penalties;
@@ -201,7 +201,7 @@ while(<AVAILABLE>){
     my @tokens = split(' ', $_);
     my $line_id = $.;
     if (($_ =~ m/^$/) or (scalar(@tokens) > $length_cap)) {
-        ## skip any line that's empty, or too long. 
+        ## skip any line that's empty, or too long.
         $junk_lines_hash{$line_id}{string} = "$_";
         next;
     }
@@ -262,7 +262,7 @@ while (my ($word, $throwaway_hashvalue) = each %lexicon_hash) {
     if ($word =~ m/^__/) {
         ## don't mess with any labels we've created
         delete $selectable_words_hash{$word};
-        ## ...but we'll use them after all the good stuff is gone. 
+        ## ...but we'll use them after all the good stuff is gone.
         $secondpass_words_hash{$word} =  -1;
     } elsif (0 == $lexicon_hash{$word}{task}{count}) {
         ## don't pick useless words (task count = 0, so we don't care about it)
@@ -317,12 +317,12 @@ while (my ($word, $throwaway_hashvalue) = each %lexicon_hash) {
             ## all of it. these words go into %ultracommon, AND
             ## %selectable. we will be limiting what goes into
             ## {line_list}, if $save_memory is enabled.
-            $ultracommon_words_hash{$word}{words_over} 
+            $ultracommon_words_hash{$word}{words_over}
                 = $lexicon_hash{$word}{avail}{count} - $maxcount;
                 ## to check whether we actually have more than $maxcount lines
             $ultracommon_words_hash{$word}{lines_over} = -$maxcount;
         }  ## otherwise, do nothing and treat it as normal.
-    } # if ($word 
+    } # if ($word
 } # while each %lexicon_hash)
 print STDERR "...done\n";
 
@@ -382,7 +382,7 @@ print STDERR " * sift k-best lines for ultracommon words...";
 while (my ($word, $throwaway_hashvalue) = each %ultracommon_words_hash_tmp) {
     ## have we seen it yet?
     $ultracommon_words_hash_tmp{$word}{uncovered} = 1;
-    ## how many more lines can we put on its now-empty stack? 
+    ## how many more lines can we put on its now-empty stack?
     if ($save_memory){
         $ultracommon_words_hash_tmp{$word}{uncapped} = $maxcount;
     } # if $save_memory
@@ -392,7 +392,7 @@ while (my ($word, $throwaway_hashvalue) = each %ultracommon_words_hash_tmp) {
 ## the ultracommon words.
 my @batchlines_init;
 foreach my $line_id (
-  sort { $available_lines_hash{$a}{score} <=> $available_lines_hash{$b}{score} } 
+  sort { $available_lines_hash{$a}{score} <=> $available_lines_hash{$b}{score} }
   keys %available_lines_hash ){
     ## get the unique words per line
     my %count;
@@ -402,7 +402,7 @@ foreach my $line_id (
         if ($ultracommon_words_hash_tmp{$word}{uncovered}){
             ## we want one line for each ultracommon to start with.
             ## don't worry about repeats right now.
-            push @batchlines_init, 
+            push @batchlines_init,
                 [$available_lines_hash{$line_id}{score}, $line_id];
             delete $ultracommon_words_hash_tmp{$word}{uncovered};
             next;
@@ -410,7 +410,7 @@ foreach my $line_id (
         if ($save_memory) {
             ## (implicit: we're under the cap, and we nuked line_list earlier)
             ## push the line to make the new {line_list}.
-            push @{$lexicon_hash{$word}{line_list}}, 
+            push @{$lexicon_hash{$word}{line_list}},
                 [$available_lines_hash{$line_id}{score}, $line_id];
             ## decrement number of lines left to pick for this word
             $ultracommon_words_hash_tmp{$word}{uncapped}--;
@@ -418,10 +418,10 @@ foreach my $line_id (
             if ($ultracommon_words_hash_tmp{$word}{uncapped} <= 0) {
                 delete $ultracommon_words_hash_tmp{$word};
                 # print STDERR "  $word      best line & score: "
-                #  . $lexicon_hash{$word}{line_list}->[0][1] ." , " 
+                #  . $lexicon_hash{$word}{line_list}->[0][1] ." , "
                 #  . $lexicon_hash{$word}{line_list}->[0][0] ."\n";
                 # print STDERR "        worst line & score: "
-                #  . $lexicon_hash{$word}{line_list}->[-1][1] ." , " 
+                #  . $lexicon_hash{$word}{line_list}->[-1][1] ." , "
                 #  . $lexicon_hash{$word}{line_list}->[-1][0] ."\n";
             } # if ($ultracommon_words_hash_tmp{$word}{uncapped} <= 0)
         } # if ($save_memory)
@@ -446,7 +446,7 @@ while (@batchlines_init) {
     my ($initline_score, $initline_id) = @{$init_tuple};
     next unless defined $available_lines_hash{$initline_id}; ## already added
     $currmodel_linecount++; ## give this line its new rank
-    my @initline_tokens 
+    my @initline_tokens
       = split(' ', $available_lines_hash{$initline_id}{string});
     my %initline_words;
     foreach (@initline_tokens) {
@@ -455,7 +455,7 @@ while (@batchlines_init) {
     } # foreach (@initline_tokens)
     foreach (keys %initline_words){
         ## keep track of ultracommon_word usage
-        $ultracommon_words_hash{$_}{lines_over}-- 
+        $ultracommon_words_hash{$_}{lines_over}--
           if defined $ultracommon_words_hash{$_};
         ## update the count for this word
         $currmodel_hash{$_}{count} += $initline_words{$_};
@@ -475,12 +475,12 @@ while (@batchlines_init) {
     $currmodel_wordcount += $available_lines_hash{$initline_id}{tokencount};
 
     delete $available_lines_hash{$initline_id}; ## remove the line entirely
-    delete $ultracommon_lines_hash{$initline_id} 
+    delete $ultracommon_lines_hash{$initline_id}
       if defined $ultracommon_lines_hash{$initline_id};
     $linecounter++;
     last if $linecounter == $numlines; ## ok to drop everything after this line.
 } # while @batchlines_init
-print STDERR "    initialized JADED with $currmodel_linecount lines.\n"; 
+print STDERR "    initialized JADED with $currmodel_linecount lines.\n";
 @ultracommon_lines_array = keys %ultracommon_lines_hash if $save_memory;
 
 print STDERR " * compute gain estimates for all selectable words...  ";
@@ -488,7 +488,7 @@ print STDERR " * compute gain estimates for all selectable words...  ";
 while (my ($word, $throwaway_hashvalue) = each %selectable_words_hash) {
     ## update the word gain estimates for all selectable words.
     ## the value is the WGE itself.
-    $selectable_words_hash{$word} = $lexicon_hash{$word}{hconstant} * 
+    $selectable_words_hash{$word} = $lexicon_hash{$word}{hconstant} *
       log( ($currmodel_hash{$word}{count} + $smoothing_count) /
            ($currmodel_hash{$word}{count} + 1)   );
     ## copying it to %lexicon_hash just in case.
@@ -501,7 +501,7 @@ print STDERR "...done\n";
 print STDERR " * sorting lines for selectable words...  ";
 while (my ($word, $throwaway_hashvalue) = each %selectable_words_hash) {
     # ## sort the lines for each word, in place, lowest score first.
-    # @{$lexicon_hash{$word}{line_list}} 
+    # @{$lexicon_hash{$word}{line_list}}
     #     = sort { $a->[0] <=> $b->[0] } @{$lexicon_hash{$word}{line_list}};
     # the lines were pushed in sorted order already.
     print STDOUT "$word\t" . scalar @{$lexicon_hash{$word}{line_list}} ."\n";
@@ -531,7 +531,7 @@ while ($iterations > 0){
     if ($save_memory and defined $ultracommon_words_hash{$bestword}){
         ## keep {line_list} small for performance
         @tmp_list  = List::MoreUtils::uniq(
-          grep { defined $available_lines_hash{@{$_}[1]} } 
+          grep { defined $available_lines_hash{@{$_}[1]} }
               @{$lexicon_hash{$bestword}{line_list}} );
         $lexicon_hash{$bestword}{line_list} = \@tmp_list;
     }# ($save_memory and defined $ultracommon_words_hash{$bestword})
@@ -539,7 +539,7 @@ while ($iterations > 0){
         if (rand() < 0.01) {
             ## once in a while, prune the entire line_list.
             $lexicon_hash{$bestword}{line_list}
-              = [ grep { defined $available_lines_hash{@{$_}[1]} } 
+              = [ grep { defined $available_lines_hash{@{$_}[1]} }
                 @{$lexicon_hash{$bestword}{line_list}} ];
         }
     }
@@ -565,10 +565,10 @@ while ($iterations > 0){
             $batchsize = POSIX::ceil( sqrt($num_lines_for_bestword) );
         }
         ## we can guarantee $batchsize =< $num_lines_for_bestword
-    } # if (($batchmode) 
+    } # if (($batchmode)
 
     print STDERR "\n    current batchsize = $batchsize // $num_lines_for_bestword\n";
-    print STDERR "     :: 1best word done in " . Time::HiRes::tv_interval($t0) 
+    print STDERR "     :: 1best word done in " . Time::HiRes::tv_interval($t0)
       . " // " . Time::HiRes::tv_interval($t0) ."\n";
     my $t2 = [Time::HiRes::gettimeofday];
 
@@ -636,7 +636,7 @@ while ($iterations > 0){
         next if (666 == $lexicon_hash{$bestword}{line_list}[$_]->[0]);
         my $tmp_line = $lexicon_hash{$bestword}{line_list}[$_]->[1];
         if (exists $available_lines_hash{$tmp_line}){
-            $lexicon_hash{$bestword}{line_list}[$_]->[0] 
+            $lexicon_hash{$bestword}{line_list}[$_]->[0]
               = $available_lines_hash{$tmp_line}{score};
         }
         else {
@@ -647,7 +647,7 @@ while ($iterations > 0){
             #     next;
         }
     } # foreach ( $updatesize..$#{$lexicon_hash{$bestword}{line_list}} )
-    print STDERR "           pruning ", scalar @indices_to_prune, 
+    print STDERR "           pruning ", scalar @indices_to_prune,
       " ghosts.\n" if (@indices_to_prune);
     while (@indices_to_prune){
         my $prune = pop @indices_to_prune; # decreasing order!
@@ -666,7 +666,7 @@ my $t2b = [Time::HiRes::gettimeofday];
     $num_lines_for_bestword = scalar @{$lexicon_hash{$bestword}{line_list}};
     ## reset updatesize
     $updatesize = 2*$batchsize;
-    $updatesize = $num_lines_for_bestword 
+    $updatesize = $num_lines_for_bestword
       if ($updatesize > $num_lines_for_bestword);
 
 # print STDERR "update size: $updatesize, from $batchsize and "
@@ -678,22 +678,22 @@ my $t2b = [Time::HiRes::gettimeofday];
     ## find the best 2*batchsize lines in the stack
 # {
 # no autovivification qw(fetch exists strict); ## otherwise the sort fucks things up.
-    $lexicon_hash{$bestword}{line_list} = 
+    $lexicon_hash{$bestword}{line_list} =
       [ Sort::Key::Top::nkeypart { $available_lines_hash{$_->[1]}{score} }
-        $updatesize  
-        => grep { defined $available_lines_hash{@{$_}[1]} } 
+        $updatesize
+        => grep { defined $available_lines_hash{@{$_}[1]} }
                 @{$lexicon_hash{$bestword}{line_list}} ]; ## over {line_list} tuples
     # ## the top elements aren't themselves in sorted order, so:
-    # @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1] 
-    #   = sort { $a->[0] <=> $b->[0] } 
+    # @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1]
+    #   = sort { $a->[0] <=> $b->[0] }
     #     @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1];
 # }
-    if ($save_memory 
+    if ($save_memory
       && (defined $ultracommon_words_hash{$bestword})
       && ($num_lines_for_bestword > $maxcount) ){
         ## sort the head of the hash
-        @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1] 
-          = sort { $a->[0] <=> $b->[0] } 
+        @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1]
+          = sort { $a->[0] <=> $b->[0] }
           @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1];
         ## prune oversized ultracommon stacks back to $maxcount.
         $lexicon_hash{$bestword}{line_list}
@@ -702,13 +702,13 @@ my $t2b = [Time::HiRes::gettimeofday];
 #     ## find where the previous worst score wound up, but only look in the
 #     ## just-updated pile?
 # # TO FIX?
-# #      = List::MoreUtils::firstidx { $_->[0] > $worst_batch_score } 
-#     my $insertion_index 
-#       = List::MoreUtils::lastidx { $_->[0] <= $worst_batch_score } 
+# #      = List::MoreUtils::firstidx { $_->[0] > $worst_batch_score }
+#     my $insertion_index
+#       = List::MoreUtils::lastidx { $_->[0] <= $worst_batch_score }
 #       @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1];
 #     ## last_idx returns -1 if none found:
 #     $insertion_index = $num_lines_for_bestword-1
-#       if ($insertion_index < 0 
+#       if ($insertion_index < 0
 #         or $insertion_index > $num_lines_for_bestword-1 );
     my $insertion_index = $updatesize - 1; ## speed hack
     print STDERR "    now updating everything up to line index ",
@@ -716,7 +716,7 @@ my $t2b = [Time::HiRes::gettimeofday];
     ## update every element above it, unless we just updated it.
     foreach (0..$insertion_index) {
         my $tmp_line = $lexicon_hash{$bestword}{line_list}[$_]->[1];
-        next if (exists $just_updated_lines{$tmp_line} 
+        next if (exists $just_updated_lines{$tmp_line}
             and ($just_updated_lines{$tmp_line} > 0));
         my $tmp_sge = compute_sentence_gain_estimate(\$tmp_line);
         if (! defined $tmp_sge){
@@ -741,15 +741,15 @@ my $t2c = [Time::HiRes::gettimeofday];
 # {
 # no autovivification qw(fetch exists strict); ## otherwise the sort fucks things up.
     ## sort the stack (or part of it, anyway)
-    $lexicon_hash{$bestword}{line_list} = 
+    $lexicon_hash{$bestword}{line_list} =
       [ Sort::Key::Top::nkeypart { $available_lines_hash{$_->[1]}{score} }
-        $updatesize  
-        => grep { defined $available_lines_hash{@{$_}[1]} } 
+        $updatesize
+        => grep { defined $available_lines_hash{@{$_}[1]} }
                 @{$lexicon_hash{$bestword}{line_list}} ]; ## over {line_list} tuples
 # }
     ## the top elements aren't themselves in sorted order, so:
-    @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1] 
-      = sort { $a->[0] <=> $b->[0] } 
+    @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1]
+      = sort { $a->[0] <=> $b->[0] }
         @{$lexicon_hash{$bestword}{line_list}}[0..$updatesize-1];
 
 # print STDERR "now index 0 element : ".$lexicon_hash{$bestword}{line_list}->[0][0]
@@ -776,8 +776,8 @@ my $t2c = [Time::HiRes::gettimeofday];
             } else{
 #print STDERR " pushing $line_id into batchlines for $bestword\n";
                 push @batchlines, [$line_score, $line_id];
-                $prev_string = $available_lines_hash{$line_id}{string}; 
-                ## keep going til we hit the cap.           
+                $prev_string = $available_lines_hash{$line_id}{string};
+                ## keep going til we hit the cap.
                 last if scalar @batchlines >= $batchsize;
             }
         } # foreach  @{$lexicon_hash{$bestword}{line_list}}
@@ -793,7 +793,7 @@ print STDERR "         :: second sort and prep done in "
   . Time::HiRes::tv_interval($t2c) ."\n";
 
 
-    print STDERR "     :: batch prep done in ". Time::HiRes::tv_interval($t2) 
+    print STDERR "     :: batch prep done in ". Time::HiRes::tv_interval($t2)
       . " // " . Time::HiRes::tv_interval($t0) ."\n";
     my $t3 = [Time::HiRes::gettimeofday];
 
@@ -809,7 +809,7 @@ print STDERR "        ignored the ghost of goodline $goodline_id.\n";
             next; ## move on
         } # (! defined $available_lines_hash{$goodline_id})
         $currmodel_linecount++; ## give this line its new rank
-        my @goodline_tokens 
+        my @goodline_tokens
           = split(' ', $available_lines_hash{$goodline_id}{string});
         my %line_words;
         foreach (@goodline_tokens) {
@@ -818,7 +818,7 @@ print STDERR "        ignored the ghost of goodline $goodline_id.\n";
         } # foreach (@goodline_tokens)
         foreach (keys %line_words){
             ## keep track of ultracommon_word usage
-            $ultracommon_words_hash{$_}{lines_over}-- 
+            $ultracommon_words_hash{$_}{lines_over}--
               if defined $ultracommon_words_hash{$_};
         }
         my $goodline_sge = $available_lines_hash{$goodline_id}{SGE};
@@ -836,7 +836,7 @@ print STDERR "        ignored the ghost of goodline $goodline_id.\n";
         ## update the currmodel with the contents of the sentence.
 
         delete $available_lines_hash{$goodline_id}; ## remove the line entirely
-        delete $ultracommon_lines_hash{$goodline_id} 
+        delete $ultracommon_lines_hash{$goodline_id}
           if defined $ultracommon_lines_hash{$goodline_id};
         $linecounter++;
         last if $linecounter == $numlines; ## ok to drop everything after this line.
@@ -847,7 +847,7 @@ print STDERR "        ignored the ghost of goodline $goodline_id.\n";
         }
     } # while @batchlines
 
-    print STDERR "     :: batch printing done in " . Time::HiRes::tv_interval($t3) 
+    print STDERR "     :: batch printing done in " . Time::HiRes::tv_interval($t3)
       . " // " . Time::HiRes::tv_interval($t0) ."\n";
     my $t4 = [Time::HiRes::gettimeofday];
 
@@ -859,9 +859,9 @@ print STDERR "        ignored the ghost of goodline $goodline_id.\n";
         $lexicon_hash{$word}{avail}{count} -= $word_count;
 
         ## update the word gain estimates for these just-seen words.
-        ## the WGE is unchanged for words not in the sentence. 
+        ## the WGE is unchanged for words not in the sentence.
         $lexicon_hash{$word}{WGE} = $lexicon_hash{$word}{hconstant}
-          * log( ($currmodel_hash{$word}{count} + $smoothing_count) 
+          * log( ($currmodel_hash{$word}{count} + $smoothing_count)
             / ($currmodel_hash{$word}{count} + 1) );
         ## only update %selectable_words and the queue if it's already selectable.
         if (defined $selectable_words_hash{$word}){
@@ -874,38 +874,38 @@ print STDERR "        ignored the ghost of goodline $goodline_id.\n";
 
     ## is this an ultracommon word with a depleted stack?
     if ( $save_memory
-        && (defined $ultracommon_words_hash{$bestword}) 
+        && (defined $ultracommon_words_hash{$bestword})
         && ( (! defined $lexicon_hash{$bestword}{line_list})
              or ($num_lines_for_bestword < $refill_line)
         )){
         ## yep! fill'er up!
-        print STDERR "refilling ' $bestword ' {line_list} from ", 
+        print STDERR "refilling ' $bestword ' {line_list} from ",
           "$num_lines_for_bestword to $maxcount. ";
         ## empty out {line_list} so we can refill it properly.
         @{$lexicon_hash{$bestword}{line_list}} = ();
         ## refill, taking advantage of all updated scores since last refill.
-        my @line_list 
-          = Sort::Key::Top::nkeytop { $available_lines_hash{$_}{score} } $maxcount 
-          => grep { (defined $ultracommon_lines_hash{$_}) 
+        my @line_list
+          = Sort::Key::Top::nkeytop { $available_lines_hash{$_}{score} } $maxcount
+          => grep { (defined $ultracommon_lines_hash{$_})
                         and ($ultracommon_lines_hash{$_}{$bestword}) }
             @ultracommon_lines_array;
         ## we cache the keys infrequently because recomputing is expensive!
         # use line_ids to push scores and lines. requires pre-pruned array.
         foreach (@line_list) {
-            push @{$lexicon_hash{$bestword}{line_list}}, 
+            push @{$lexicon_hash{$bestword}{line_list}},
                  [$available_lines_hash{$_}{score}, $_];
         }
-        $ultracommon_words_hash{$bestword}{words_over} 
+        $ultracommon_words_hash{$bestword}{words_over}
           -= $batchlines_count{$bestword};
         ## is this word under the maxcount cap and no longer ultracommon?
-        if ( ($ultracommon_words_hash{$bestword}{lines_over} < 0) 
+        if ( ($ultracommon_words_hash{$bestword}{lines_over} < 0)
             or (scalar @line_list < $maxcount) ){
             print STDERR "\n   !! word $bestword is no longer ultracommon! "
               . "only appears in ". scalar @line_list ." more lines.\n";
             delete $ultracommon_words_hash{$bestword};
         }
-        print STDERR " now ", count_num_lines_for_word(\$bestword), 
-          " lines available.\n";            
+        print STDERR " now ", count_num_lines_for_word(\$bestword),
+          " lines available.\n";
     } # while each %ultracommon_lines_hash
     ## else: nope, this is a normal word
 
@@ -937,7 +937,7 @@ while (my ($line_id, $throwaway_hashvalue) = each %junk_lines_hash) {
     ## JADED columns: sentence {input line_id, output rank, score,
     ## penalty, gain, total score, the root word, WGE, and the string.
     print JADED join("\t", ( $line_id, $currmodel_linecount, 666,
-       666, 666, 666, "JUNKLINE", 666, 
+       666, 666, 666, "JUNKLINE", 666,
        $junk_lines_hash{$line_id}{string} ) ) . "\n";
     delete $junk_lines_hash{$line_id}; ## remove the line entirely
 } # while each %junk_lines_hash
@@ -958,7 +958,7 @@ sub update_length_penalties {
     ## compute the penalties for adding a certain number of words to the
     ## selected set. The base case (where currmodel_wordcount=0) is handled above.
     foreach (0..$length_cap) {
-    	$length_penalty{$_} 
+    	$length_penalty{$_}
           = log( ($currmodel_wordcount + $_) / $currmodel_wordcount );
     }
 }
@@ -979,7 +979,7 @@ sub compute_sentence_gain_estimate {
     while (my ($word, $throwaway_hashvalue) = each %count) {
     	## compute the estimated gain for the sentence
     	$sentence_gain_estimate += ($lexicon_hash{$word}{hconstant}
-            * log( ($currmodel_hash{$word}{count} + $smoothing_count) 
+            * log( ($currmodel_hash{$word}{count} + $smoothing_count)
                     / ($currmodel_hash{$word}{count} + $count{$word}) ) );
     } # while
     ## update the sentence's estimated gain
@@ -1001,7 +1001,7 @@ sub find_best_word_gain_estimate {
     } else {
         ## check if we still have words to pick.
         print STDERR "Out of words! Going for another second pass with lower standards...\n";
-        if (! %{$ref_selectable_words_hash}) { 
+        if (! %{$ref_selectable_words_hash}) {
             ## nope, no %selectable_words
             %selectable_words_hash = %secondpass_words_hash;
             %secondpass_words_hash = ();
@@ -1017,7 +1017,7 @@ sub find_best_word_gain_estimate {
             while (my ($word, $throwaway_hashvalue) = each %selectable_words_hash) {
                 ## update the word gain estimates for all selectable words.
                 ## the value is the WGE itself.
-                $selectable_words_hash{$word} = $lexicon_hash{$word}{hconstant} * 
+                $selectable_words_hash{$word} = $lexicon_hash{$word}{hconstant} *
                 log( ($currmodel_hash{$word}{count} + $smoothing_count) /
                    ($currmodel_hash{$word}{count} + 1)   );
                 ## copying it to %lexicon_hash just in case.
@@ -1032,7 +1032,7 @@ sub find_best_word_gain_estimate {
                 ## improvement score (net benefit if negative, net harmful if
                 ## positive) of a sentence is the penalty plus the gain.
                 my $sentence_gain_estimate = compute_sentence_gain_estimate(\$line_id);
-# do something if SGE is undef                
+# do something if SGE is undef
                 ## it's unnecessary to compute for all %available_lines, as we can get
                 ## away with initially only computing for the lines that contain a
                 ## selectable word. but... for now it's just initialization overhead.
@@ -1061,7 +1061,7 @@ sub find_best_word_gain_estimate {
                 ## skip word if no lines left
                 next if ($num_lines_for_word == 0);
                 ## sort the lines for each word, in place, lowest score first.
-                @{$lexicon_hash{$word}{line_list}} 
+                @{$lexicon_hash{$word}{line_list}}
                   = sort { $a->[0] <=> $b->[0] } @{$lexicon_hash{$word}{line_list}};
             } # if (%selectable_words_hash)
             print STDERR "...done adding secondpass_words to selectable_words\n";
@@ -1091,18 +1091,18 @@ sub count_num_lines_for_word {
           and defined $ultracommon_words_hash{$$ref_bestword}){
             ## ultracommon needs refill, taking advantage of all updated
             ## scores since last refill.
-            my @line_list 
-              = Sort::Key::Top::nkeytop { $available_lines_hash{$_}{score} } $maxcount 
-              => grep { (defined $ultracommon_lines_hash{$_}) 
+            my @line_list
+              = Sort::Key::Top::nkeytop { $available_lines_hash{$_}{score} } $maxcount
+              => grep { (defined $ultracommon_lines_hash{$_})
                             and ($ultracommon_lines_hash{$_}{$$ref_bestword}) }
                 @ultracommon_lines_array;
             # use line_ids to push scores and lines.
             foreach (@line_list) {
-                push @{$lexicon_hash{$$ref_bestword}{line_list}}, 
+                push @{$lexicon_hash{$$ref_bestword}{line_list}},
                      [$available_lines_hash{$_}{score}, $_];
             }
             ## is this word under the maxcount cap and no longer ultracommon?
-            if ( ($ultracommon_words_hash{$$ref_bestword}{lines_over} < 0) 
+            if ( ($ultracommon_words_hash{$$ref_bestword}{lines_over} < 0)
                 or (scalar @line_list < $maxcount) ){
                 print STDERR "\n   !! word $$ref_bestword is no longer ultracommon! ",
                   "only appears in ", scalar @line_list, " more lines.\n";
@@ -1112,12 +1112,12 @@ sub count_num_lines_for_word {
         }
         else {
             ## cleanup if no lines left (this is why it goes in a subroutine);
-            ## delete the word from %selectable_words 
+            ## delete the word from %selectable_words
             print STDERR "\n        no lines left for word $$ref_bestword :",
                 " deleting it from selectable_words_hash. ";
             delete $selectable_words_hash{$$ref_bestword};
             $selectable_words_queue->remove($$ref_bestword);
-            delete $ultracommon_words_hash{$$ref_bestword} 
+            delete $ultracommon_words_hash{$$ref_bestword}
               if defined $ultracommon_words_hash{$$ref_bestword};
             print STDERR $selectable_words_queue->size(), " words left.\n";
             ## nuke the line_list entirely, just to be sure.
