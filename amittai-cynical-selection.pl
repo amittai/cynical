@@ -75,7 +75,7 @@ GetOptions ("task_vocab=s" => \$task_vocab,
     "maxcount=s"               => \$maxcount,
     "keep_boring"              => \$keep_boring,
     "batchmode"                => \$batchmode,
-    "numlines"                 => \$numlines,
+    "numlines=i"               => \$numlines,
     "save_memory"              => \$save_memory);
 
 ## set default values unless explicitly passed by user
