@@ -17,8 +17,14 @@ The original work is by amittai axelrod
 The port is by Steve Sloto
 '''
 
-import os, re, shutil, subprocess, sys
-from datetime import datetime
+import os
+import re
+import shutil
+import subprocess
+import sys
+from collections import Counter
+import datetime
+import copy
 
 def cynical_selection(repr_lines, avail_lines, seed_lines=[],
                  batch_mode=False, keep_boring=True, 
@@ -43,88 +49,110 @@ def cynical_selection(repr_lines, avail_lines, seed_lines=[],
     if shutil.which(cynical_perl_script) == None:
         raise PermissionError("cynical_perl_script is not  executible...")
 
-    #Set up the directory where we’re going to work (if it doesn’t exist)...
+    # Set up the directory where we’re going to work (if it doesn’t exist)...
     os.makedirs(outdir, mode=0o777, exist_ok=True)
     
-    #Run a few checks up front to see if any of our inputs are equivalent.
-    #If so, we can cut down on our pre-processing.
-    if debug: sys.stderr.write("Checking whether input files are duplicates at "+datetime.now().isoformat(" ")+"\n")
+    # Run a few checks up front to see if any of our inputs are equivalent.
+    # If so, we can cut down on our pre-processing.
+    if debug:
+        sys.stderr.write("Checking whether input files are duplicates at {}\n".format(get_timestamp()))
     avail_is_repr = (avail_lines == repr_lines)
     seed_is_repr = (seed_lines == repr_lines)
     seed_is_avail = (seed_lines == avail_lines)
+
+    # Cool, now we can change the contents of the lists away from how they were originally input.
+    # We'll start with avail, and follow all of the steps needed to get it ready for the perl script.
+    if debug:
+        sys.stderr.write("Sanitizing AVAIL Lines... at {}\n".format(get_timestamp()))
+    # cast this to a list b.c. we want to use its output twice (once to save for cynical, once for calculating mad stats)
+    avail_lines = list(prep_lines(avail_lines))
     
+    # We only care about having the full corpus for the available set written to file for downstream use
+    # For the others, we're just cleaning them up for use for vocabulary statistics.
+    sys.stderr.write("Writing preprocessed AVAIL corpus to disk at {}\n".format(get_timestamp()))
+    avail_corpus_file = os.path.join(outdir, "avail.corpus")
+    with open(avail_corpus_file, 'w', encoding='utf-8') as available_corpus:
+        for line in avail_lines:
+            available_corpus.write(line)
+            available_corpus.write('\n')
     
-    #Cool, now we can change the contents of the lists away from how they were originally input.
-    #We'll start with avail, and follow all of the steps needed to get it ready for the perl script.
-    if debug: sys.stderr.write("Sanitizing AVAIL Lines... at "+datetime.now().isoformat(" ")+"\n")
-    avail_lines = prep_lines(avail_lines)
-    
-    #We only care about having the full corpus for the available set written to file for downstream use
-    #For the others, we're just cleaning them up for use for vocabulary statistics.
-    avail_corpus_file=outdir+"/avail.corpus"
-    with open(avail_corpus_file, 'w') as available_corpus:
-        available_corpus.write('\n'.join(avail_lines)+'\n')
-    
-    #Now we'll get our vocabulary counts, and write those to disk
-    if debug: sys.stderr.write("Counting AVAIL Words... at "+datetime.now().isoformat(" ")+"\n")
-    avail_words=get_vocab_counts(avail_lines)
-    avail_vcb_file=outdir+"/avail.vocab"
-    if debug: sys.stderr.write("Writing AVAIL Words... at "+datetime.now().isoformat(" ")+"\n")
-    write_vocab_counts(avail_words, avail_vcb_file)
-    
+    # Now we'll get our vocabulary counts, and write those to disk
+    if debug:
+        sys.stderr.write("Counting AVAIL Words... at {}\n".format(get_timestamp()))
+    avail_counts = get_vocab_counts(avail_lines)
     
     if avail_is_repr:
-        #If we've prepped the same list already, skip the computation.
-        repr_words = avail_words
+        # if we've prepped the same list already, skip the computation.
+        repr_counts = copy.deepcopy(avail_counts)
         repr_vcb_file = avail_vcb_file
     else:
-        #if we have a separate representative set, do the same prep minus writing the corpus to disk
-        if debug: sys.stderr.write("Sanitizing REPR Lines... at "+datetime.now().isoformat(" ")+"\n")
+        # if we have a separate representative set, do the same prep minus writing the corpus to disk
+        if debug:
+            sys.stderr.write("Sanitizing REPR Lines... at {}\n".format(get_timestamp()))
         repr_lines = prep_lines(repr_lines)
-        if debug: sys.stderr.write("Counting REPR Words... at "+datetime.now().isoformat(" ")+"\n")
-        repr_words=get_vocab_counts(repr_lines)
-        if debug: sys.stderr.write("Writing REPR Words... at "+datetime.now().isoformat(" ")+"\n")
-        repr_vcb_file=outdir+"/repr.vocab"
-        write_vocab_counts(repr_words, repr_vcb_file)
-    
-    #Similar checks for whether we run computation for seed
-    if seed_is_repr:
-        seed_vcb_file = repr_vcb_file
-    elif seed_is_avail:
-        seed_vcb_file = avail_vcb_file
-    else:
-        #And, if we have a unique seed, we'll prep that.
-        if debug: sys.stderr.write("Sanitizing SEED Lines... at "+datetime.now().isoformat(" ")+"\n")
-        seed_lines= prep_lines(seed_lines)
-        if debug: sys.stderr.write("Counting SEED Words... at "+datetime.now().isoformat(" ")+"\n")
-        seed_words=get_vocab_counts(seed_lines)
-        if debug: sys.stderr.write("Writing SEED Words... at "+datetime.now().isoformat(" ")+"\n")
-        seed_vcb_file=outdir+"/seed.vocab"
-        write_vocab_counts(seed_words, seed_vcb_file)
-    
-    if debug:
-        sys.stderr.write(datetime.now().isoformat(" ")+\
-        " -- All Corpora have been preprocessed, vocab files written to disk\n")
 
-    #Now we need vocabulary ratios between REPR and AVAIL.
-    #We probably do not need the ratios themselves for cynical
-    #But we will need a file with its specific format.
-    sys.stderr.write(datetime.now().isoformat(" ")+\
-    " Calculating vocabulary ratio...\n")
-    ratios=get_vocab_ratios(repr_words, avail_words)
-    vcb_ratio_file=outdir+"/repr.avail.vocab.ratios"
-    write_vocab_ratios(ratios, vcb_ratio_file)
-    sys.stderr.write(datetime.now().isoformat(" ")+\
-    " Vocabulary ratios calculated, written to disk\n")
-    
+        if debug:
+            sys.stderr.write("Counting REPR Words... at {}\n".format(get_timestamp()))
+        repr_counts = get_vocab_counts(repr_lines)
+
+    # Similar checks for whether we run computation for seed
+    if seed_is_repr:
+        seed_counts = copy.deepcopy(repr_counts)
+    elif seed_is_avail:
+        seed_counts = copy.deepcopy(avail_counts)
+    else:
+        # If we have a unique seed, we do our preprocessing and counting.
+        if debug:
+            sys.stderr.write("Sanitizing & Counting SEED Lines... at {}\n".format(get_timestamp()))
+        seed_lines = prep_lines(seed_lines)
+        seed_counts = get_vocab_counts(seed_lines)
+
+    # Since we don't care about our seed counts for any ratios, we output them now.
+    if debug:
+        sys.stderr.write("Writing SEED Words... at {}\n".format(get_timestamp()))
+
+    seed_vcb_file = os.path.join(outdir, "seed.vocab")
+    with open(seed_vcb_file, 'w', encoding='utf-8') as seed_vcb_out:
+        for line in seed_counts:
+            seed_vcb_out.write("\t".join([str(x) for x in line]))
+            seed_vcb_out.write("\n")
+
+    if debug:
+        sys.stderr.write("{} -- All Corpora have been preprocessed, vocab files written to disk\n".format(get_timestamp()))
+
+    sys.stderr.write("{} Calculating vocabulary ratio...\n".format(get_timestamp()))
+    ratios = get_vocab_ratios(repr_counts, avail_counts)
+
+    # We output vocabulary ratios, along with counts for REPR & AVAIL simultaneously...
+    sys.stderr.write("{}  -- Writing vocabulary ratios & avail/repr counts to disk...\n".format(get_timestamp()))
+    vcb_ratio_file = os.path.join(outdir, "repr.avail.vocab.ratios")
+    repr_vcb_file = os.path.join(outdir, "repr.vocab")
+    avail_vcb_file = os.path.join(outdir, "avail.vocab")
+
+    with open(vcb_ratio_file, 'w', encoding='utf-8') as ratios_out, \
+            open(repr_vcb_file, 'w', encoding='utf-8') as repr_counts_out, \
+            open(avail_vcb_file, 'w', encoding='utf-8') as avail_counts_out:
+        for word_name, word_stats in ratios.items():
+            # count file formats are word <tab> probability <tab> count
+            if word_stats.corpus_1_count is not None:
+                repr_counts_out.write('{}\t{}\t{}\n'.format(word_name, str(word_stats.corpus_1_probability), str(word_stats.corpus_1_count)))
+            if word_stats.corpus_2_count is not None:
+                avail_counts_out.write('{}\t{}\t{}\n'.format(word_name, str(word_stats.corpus_2_probability), str(word_stats.corpus_2_count)))
+
+            # ratio file is also a *.tsv, order of columns besides word_name is provided in get_value_list method of WordProbabilityInformation
+            ratios_out.write(word_name)
+            ratios_out.write('\t')
+            ratios_out.write('\t'.join([str(value) for value in word_stats.get_value_list()]))
+            ratios_out.write('\n')
+
     #Delete the things that will eat memory
-    del repr_words
-    del avail_words
-    del seed_words
+    del repr_counts
+    del avail_counts
+    del seed_counts
     del repr_lines
     del seed_lines
     
-    jaded_file=outdir+"/jaded.output"
+    jaded_file = os.path.join(outdir, "/jaded.output")
 
     #Now begins the process of writing up our command-line arguments for calling the thing
     #shlex says we want our calls to look like this:
@@ -152,7 +180,7 @@ def cynical_selection(repr_lines, avail_lines, seed_lines=[],
             
     #Call our perl script
     if debug:
-        sys.stderr.write("Calling cynical perl script... at "+datetime.now().isoformat(" ")+"\n")
+        sys.stderr.write("Calling cynical perl script... at {}\n".format(get_timestamp()))
         sys.stderr.write("\n  ".join(cynical_args)+"\n")
     with subprocess.Popen(cynical_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as cynical_proc:
         with open(outdir+"/cynical.stderr", "wb") as stderr, open(outdir+"/cynical.stdout", "wb") as stdout:
@@ -169,39 +197,81 @@ def cynical_selection(repr_lines, avail_lines, seed_lines=[],
             sys.stderr.write("We've finished with our selection, output is saved to "+jaded_file+"\n")
     return cynical_out
 
+def get_timestamp():
+    return datetime.datetime.now().isoformat(" ")
+
+none_to_zero = lambda x: 0 if x is None else x
+
+class WordProbabilityInformation():
+    '''Utility object for holding corpus-level stats about word probabilities'''
+    def __init__(self):
+        self.corpus_1_probability = None
+        self.corpus_1_count = None
+        self.corpus_2_probability = None
+        self.corpus_2_count = None
+        self.ratio = None
+
+    def add_corpus_1_info(self, probability, count):
+        self.corpus_1_probability = probability
+        self.corpus_1_count = count
+
+    def add_corpus_2_info(self, probability, count):
+        self.corpus_2_probability = probability
+        self.corpus_2_count = count
+
+    def compute_ratio(self):
+        # if we have probabilities for corpus_1 and corpus_2, then we ratio those
+        if self.corpus_1_probability is not None and self.corpus_2_probability is not None:
+            self.ratio = self.corpus_1_probability / self.corpus_2_probability
+        # if we have probabilities for only corpus 2
+        elif self.corpus_2_count is not None:
+            self.ratio = 1/(2 * self.corpus_2_count)
+        # if we have probabilities for only corpus 1
+        elif self.corpus_1_count is not None:
+            self.ratio = 2 * self.corpus_1_count
+
+    def get_value_list(self):
+        '''Returns cleaned list of values in format used by vocab ratio file.'''
+        return [self.ratio,
+                  none_to_zero(self.corpus_1_probability),
+                  none_to_zero(self.corpus_1_count),
+                  none_to_zero(self.corpus_2_probability),
+                  none_to_zero(self.corpus_2_count)]
+
+
 def prep_lines(corpus, lower=True):
-    ''' Takes in a corpus, does the hackneyed preprocessing for downsteam perl/cynical requirements'''
-    # "match at least two underscores preceded by space or
-    # start-of-line, and mark them"
-    corpus_out = []
-    for line in corpus:
-        line = re.sub(r'(\s|^)(__+)', r'\1@\2@', line) #probably not needed
-        # Get rid of nbsp's and unpleasant runs of spaces
-        line = re.sub(r'\s+', ' ', line)
-        line = line.strip()
-        if lower == True:
-            line = line.lower()
-        corpus_out.append(line)
-    return corpus_out
+    ''' Takes in a corpus (list of str), does the hackneyed preprocessing for downsteam perl/cynical requirements'''
+
+    # "match at least two underscores preceded by space or start-of-line, and mark them"
+    corpus = map(lambda x: re.sub(r'(\s|^)(__+)', r'\1@\2@', x), corpus)
+
+    # Get rid of non-breaking space and unpleasant runs of spaces
+    corpus = map(lambda x: re.sub(r'\s+', ' ', x), corpus)
+
+    # strip other whitespace
+    corpus = map(lambda x: x.strip(), corpus)
+
+    # optional lowercase
+    if lower:
+        corpus = map(lambda x: x.lower(), corpus)
+
+    return corpus
+
 
 def get_vocab_counts(corpus):
     ''' Reads in a list of sentences, returns a list of tuples of (word, probability, count)
     sorted by descending frequency. This is a reimplementation of 'amittai-vocab-compute-counts.pl' '''
-    vocab_list = [word for line in corpus for word in line.split()]
-    vocab_size = len(vocab_list)
-    vocab_counts = {}
-    for word in vocab_list:
-        if word in vocab_counts:
+    vocab_counts = Counter()
+    for line in corpus:
+        for word in line.split():
             vocab_counts[word] += 1
-        else:
-            vocab_counts[word] = 1
-    word_stats = []
-    
-    #We sort first by numerical score (in Descending order, hence the minus 1)
-    #And then we sort alphabetically
-    for word in sorted(vocab_counts, key=lambda x: (-1 * vocab_counts[x], x)):
-        word_stats.append((word, vocab_counts[word]/float(vocab_size), vocab_counts[word]))
-    return word_stats
+
+    vocab_size = sum(vocab_counts.values())
+
+    # We are /nearly there/ but we want to output words, probabilities, and counts rather than words and counts
+    reformat_line = lambda wordcount: (wordcount[0], float(wordcount[1]) / vocab_size, wordcount[1])
+    return map(reformat_line, vocab_counts.most_common())
+
 
 def get_vocab_ratios(vc1, vc2):
     ''' Roughly speaking, this is a reimplemntation of 'amittai-vocab-ratios.pl'
@@ -225,68 +295,29 @@ def get_vocab_ratios(vc1, vc2):
 
     ratio_dict = {}
 
-    #First we collect the counts and probs of everything in our first (tgt)
-    for tuple in vc1:
-        #Variable names for readability
-        word = tuple[0]
-        prob1 = tuple[1]
-        count1 = tuple[2]
+    # compile word stats from first list
+    for word, prob1, count1 in vc1:
+        # Add probability dict entries for any words that we have...
+        ratio_dict[word] = WordProbabilityInformation()
+        ratio_dict[word].add_corpus_1_info(prob1, count1)
 
-        ratio_dict[word] = {}
-        ratio_dict[word]['vc1_prob'] = prob1
-        ratio_dict[word]['vc1_count'] = count1
+    # compile word stats from second list
+    for word, prob2, count2 in vc2:
+        if word not in ratio_dict:
+            ratio_dict[word] = WordProbabilityInformation()
+        ratio_dict[word].add_corpus_2_info(prob2, count2)
 
-    for tuple in vc2:
-        #Variable names for readability
-        word = tuple[0]
-        prob2 = tuple[1]
-        count2 = tuple[2]
+    # get ratio information for compiled words
+    for word_probability_information in ratio_dict.values():
+        word_probability_information.compute_ratio()
 
-        if word in ratio_dict: 
-            ratio_dict[word]['ratio'] = ratio_dict[word]['vc1_prob'] / prob2
-        else:
-            #cover the case of words in distribution 2, but not in distribution 1
-            ratio_dict[word] = {}
-            #Set ratio to 1 over 2 * count for smoothing
-            ratio_dict[word]['ratio'] = 1/(2 * count2)
-            ratio_dict[word]['vc1_prob'] = 0
-            ratio_dict[word]['vc1_count'] = 0
-
-        ratio_dict[word]['vc2_prob'] = prob2
-        ratio_dict[word]['vc2_count'] = count2
-
-        for whatever in ratio_dict:
-            #Cover the case of words in distribution 1, not in distribution 2
-            if 'vc2_count' not in ratio_dict[whatever]:
-                ratio_dict[whatever]['vc2_prob'] = 0
-                ratio_dict[whatever]['vc2_count'] = 0
-                ratio_dict[whatever]['ratio'] = 2 * ratio_dict[whatever]['vc1_count']
     return ratio_dict
-    
-def write_vocab_counts(vocab_counts, outfile):
-    ''' Writes the above to a tab-seperated file'''
-    with open(outfile, 'w') as vocab_out:
-        for line in vocab_counts:
-            vocab_out.write('\t'.join([str(x) for x in line])+'\n')
 
-def write_vocab_ratios(vocab_ratios, outfile):
-    ''' Writes the above to a tab-seperated file'''
-    ## output columns are: word, prob1/prob2, prob1, count1, prob2, count2.
-    with open(outfile, 'w') as ratios_out:
-        #Like before, we're using -1*stuff for reverse sort, so the alphabetical stuff stays in the normal order 
-        for word in sorted(vocab_ratios.items(), key=lambda x: (-1 * x[1]['ratio'], -1 * x[1]['vc1_prob'], -1 * x[1]['vc2_prob'], x[0])):
-            ratios_out.write(word[0]+'\t')
-            ratios_out.write(str(word[1]['ratio'])+'\t')
-            ratios_out.write(str(word[1]['vc1_prob'])+'\t')
-            ratios_out.write(str(word[1]['vc1_count'])+'\t')
-            ratios_out.write(str(word[1]['vc2_prob'])+'\t')
-            ratios_out.write(str(word[1]['vc2_count'])+'\t')
-            ratios_out.write('\n')
 
 def read_jaded(jaded_file, avail):
     ''' Takes in a file of so-called jadedness (the output of cynical), as well as the raw corpus of available lines. '''
     jaded_info = {}
-    with open(jaded_file, 'r') as jaded:
+    with open(jaded_file, 'r', encoding='utf-8') as jaded:
         for line in jaded:
             ## JADED columns: sentence {input line_id, output rank, score,
             ## penalty, gain, total score, the root word, WGE, and the string.
@@ -303,6 +334,7 @@ def read_jaded(jaded_file, avail):
             jaded_info[raw_line]['root_word']=line[6]
             jaded_info[raw_line]['WGE']=line[7]
         return jaded_info
+
 
 def main():
     ''' An example implementation of reading in files for cynical from disk and calling the core perl module 
@@ -331,30 +363,23 @@ def main():
     parser.add_argument('--cyn-path', help="Location of cynical perl script.", default="amittai-cynical-selection.pl")
     args = parser.parse_args()
     
-    #Basic AF file IO. Sanitization follows in the prep_corpus function.
-    sys.stderr.write("Reading representative lines from "+args.repr+" at "+datetime.now().isoformat(" ")+"\n")
-    sys.stderr.flush()
-    with open(args.repr) as repr_file:
-        repr = repr_file.readlines()
-        
-    sys.stderr.write("Reading available lines from "+args.avail+" at "+datetime.now().isoformat(" ")+"\n")
-    sys.stderr.flush()
-    with open(args.avail) as avail_file:
-        avail= avail_file.readlines()
-        
-    if args.seed:
-        sys.stderr.write("Reading seed lines from "+args.seed+" at "+datetime.now().isoformat(" ")+"\n")
-        sys.stderr.flush()
-        with open(args.seed) as seed_file:
-            seed = seed_file.readlines()
-    else:
-        seed = []
+    # Give the cyncial selection function file objects so that we don't read whole corpora into memory
+    sys.stderr.write("Opening files at {}".format(get_timestamp()))
+    with open(args.repr, 'r', encoding='utf-8') as repr_file, open(args.repr, 'r', encoding='utf-8') as avail_file:
+        if args.seed:
+            seed_file = open(args.seed, 'r', encoding='utf-8')
+        else:
+            seed_file = []
 
-    cynical_out = cynical_selection(repr, avail, seed,
-                 batch_mode=args.batch_mode, keep_boring=args.keep_boring, lower=args.lower,
-                 min_count=args.min_count, max_count=args.max_count, num_lines=args.num_lines,
-                 outdir=args.out_dir, save_memory=args.save_memory, 
-                 cynical_perl_script=args.cyn_path, save_output=True)
+        cynical_selection(repr_file, avail_file, seed_file,
+                          batch_mode=args.batch_mode, keep_boring=args.keep_boring,
+                          lower=args.lower, min_count=args.min_count, max_count=args.max_count,
+                          num_lines=args.num_lines,outdir=args.out_dir, save_memory=args.save_memory,
+                          cynical_perl_script=args.cyn_path, save_output=True)
+
+        # close our seed since we're done with it
+        if seed_file != []:
+            seed_file.close()
                  
 if __name__ == "__main__":
     main()
