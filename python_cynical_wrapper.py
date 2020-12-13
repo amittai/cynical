@@ -152,7 +152,7 @@ def cynical_selection(repr_lines, avail_lines, seed_lines=[],
     del repr_lines
     del seed_lines
     
-    jaded_file = os.path.join(outdir, "/jaded.output")
+    jaded_file = os.path.join(outdir, "jaded.output")
 
     #Now begins the process of writing up our command-line arguments for calling the thing
     #shlex says we want our calls to look like this:
