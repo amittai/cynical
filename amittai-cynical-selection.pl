@@ -399,6 +399,8 @@ foreach my $line_id (
     $count{$_}++ for split(' ', $available_lines_hash{$line_id}{string});
     foreach my $word (keys %count) {
         next unless defined $ultracommon_words_hash_tmp{$word};
+	next if $currmodel_hash{$word}{count} > 0;
+	## ok so it's both ultracommon *and* we haven't seen it yet.
         if ($ultracommon_words_hash_tmp{$word}{uncovered}){
             ## we want one line for each ultracommon to start with.
             ## don't worry about repeats right now.
